@@ -6,6 +6,11 @@ on:
     tags: [ 'v*' ]
   workflow_dispatch:
 
+# needed to create a Release on tag pushes (otherwise: 403 "Resource not
+# accessible by integration")
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
