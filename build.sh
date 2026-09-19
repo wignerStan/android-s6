@@ -3,26 +3,25 @@
 #
 #   Android NDK -> aarch64-linux-android -> skalibs -> execline -> s6 -> s6-rc
 #
-# Output layout (this is also the on-device layout):
+# Output layout (identical to the on-device layout):
 #   $PREFIX/bin/      s6-svscan s6-supervise s6-svc s6-svstat s6-log s6-rc ...
-#   $PREFIX/libexec/  s6-ftrigrd s6-rc-fdhoder-filler s6-rc-oneshot-run
-#   $PREFIX/lib/      static archives (skalibs/execline/s6/s6-rc)
+#   $PREFIX/libexec/  s6-ftrigrd s6-rc-fdholder-filler s6-rc-oneshot-run
+#   $PREFIX/lib/      static archives (skalibs / execline / s6 / s6-rc)
 #
-# IMPORTANT: PREFIX is baked into the binaries. s6 tools exec helpers from
-# $PREFIX/libexec at runtime, so PREFIX MUST be the final on-device path.
-# Building with a scratch prefix fails at runtime with:
+# PREFIX is BAKED INTO the binaries: s6 execs its helpers from $PREFIX/libexec at
+# runtime, so PREFIX must be the final on-device path. A scratch prefix yields
 #   execve(<scratch>/libexec/s6-ftrigrd) = ENOENT
+# at runtime. To install elsewhere while keeping the baked prefix, use DESTDIR
+# (files land in $DESTDIR$PREFIX; build-time -I/-L point at that stage).
 set -euo pipefail
 
 PREFIX="${PREFIX:-/data/adb/s6}"
-# Optional staging root: files are installed into $DESTDIR$PREFIX while the
-# compiled-in prefix stays $PREFIX. Useful on hosts where /data is not writable
-# (macOS) and in CI.
 DESTDIR="${DESTDIR:-}"
-INSTALL_PREFIX="$DESTDIR$PREFIX"
+STAGE="$DESTDIR$PREFIX"
+
 API="${API:-24}"
-ABI="${ABI:-arm64-v8a}"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
+HOST="${HOST:-aarch64-linux-android}"
 
 SKALIBS_V="${SKALIBS_V:-2.15.1.0}"
 EXECLINE_V="${EXECLINE_V:-2.9.9.2}"
@@ -31,91 +30,98 @@ S6RC_V="${S6RC_V:-0.7.0.0}"
 
 # ---------------------------------------------------------------- NDK lookup
 find_ndk() {
-  if [ -n "${NDK:-}" ] && [ -d "$NDK" ]; then echo "$NDK"; return; fi
+  [ -n "${NDK:-}" ] && [ -d "${NDK:-}" ] && { echo "$NDK"; return; }
   for c in "$HOME/Library/Android/sdk/ndk"/* "$HOME/android-ndk-r"* \
            /opt/homebrew/share/android-ndk* /usr/local/share/android-ndk* \
-           "$HOME/ndk"/*; do
+           "$PWD"/android-ndk-r* "$HOME/ndk"/*; do
     [ -d "$c/toolchains/llvm/prebuilt" ] && { echo "$c"; return; }
   done
   echo ""
 }
 NDK="$(find_ndk)"
-[ -n "$NDK" ] || { echo "ERROR: no NDK found. Set NDK=/path/to/android-ndk-rXX" >&2; exit 1; }
+[ -n "$NDK" ] || { echo "ERROR: no NDK found; set NDK=/path/to/android-ndk-rXX" >&2; exit 1; }
 echo "NDK      : $NDK"
 
-# the prebuilt dir is named darwin-x86_64 even on Apple Silicon (universal clang)
 TC=""
 for d in "$NDK"/toolchains/llvm/prebuilt/*; do [ -d "$d" ] && TC="$d"; done
-[ -n "$TC" ] || { echo "ERROR: NDK toolchain not found under $NDK/toolchains/llvm/prebuilt" >&2; exit 1; }
-CC="$TC/bin/aarch64-linux-android${API}-clang"
-[ -x "$CC" ] || { echo "ERROR: $CC missing (wrong API level?)" >&2; exit 1; }
+[ -n "$TC" ] || { echo "ERROR: toolchain not found under $NDK/toolchains/llvm/prebuilt" >&2; exit 1; }
+CC="$TC/bin/${HOST}${API}-clang"
+[ -x "$CC" ] || { echo "ERROR: $CC missing (bad API level?)" >&2; exit 1; }
 export PATH="$TC/bin:$PATH"
-echo "toolchain: $TC"
-echo "CC       : $CC ($($CC --version | head -1))"
-
-HOST=aarch64-linux-android
-# static libraries, dynamic libc (bionic libc.so exists on every Android device,
-# so the binaries need no extra runtime libs and work pre-unlock on /data)
-export CC
+export CC AR="$TC/bin/llvm-ar" RANLIB="$TC/bin/llvm-ranlib" STRIP="$TC/bin/llvm-strip"
 export CFLAGS="${CFLAGS:--Os}"
-export AR="$TC/bin/llvm-ar"
-export RANLIB="$TC/bin/llvm-ranlib"
-export STRIP="$TC/bin/llvm-strip"
 
+echo "toolchain: $TC"
+echo "CC       : $CC"
+"$CC" --version | head -1
+echo "PREFIX   : $PREFIX   (baked in)"
+echo "STAGE    : $STAGE"
+
+# ---------------------------------------------------------------- sources
 WORK="${WORK:-$PWD/.build}"
 mkdir -p "$WORK"
 cd "$WORK"
 
-fetch() { # url file
-  [ -f "$2" ] || curl -fsSL -o "$2" "$1"
-}
-for spec in \
-  "skalibs/skalibs-$SKALIBS_V.tar.gz" \
-  "execline/execline-$EXECLINE_V.tar.gz" \
-  "s6/s6-$S6_V.tar.gz" \
-  "s6-rc/s6-rc-$S6RC_V.tar.gz" ; do
-  name="$(basename "$spec")"
-  fetch "https://skarnet.org/software/$spec" "$name"
-  rm -rf "${name%.tar.gz}"
-  tar xzf "$name"
+fetch() { [ -f "$2" ] || curl -fsSL -o "$2" "$1"; }
+for spec in "skalibs/skalibs-$SKALIBS_V" "execline/execline-$EXECLINE_V" \
+            "s6/s6-$S6_V" "s6-rc/s6-rc-$S6RC_V"; do
+  base="$(basename "$spec")"
+  fetch "https://skarnet.org/software/$spec.tar.gz" "$base.tar.gz"
+  rm -rf "$base"
+  tar xzf "$base.tar.gz"
 done
 
+D_SKALIBS="skalibs-$SKALIBS_V"
+D_EXECLINE="execline-$EXECLINE_V"
+D_S6="s6-$S6_V"
+D_S6RC="s6-rc-$S6RC_V"
+for d in "$D_SKALIBS" "$D_EXECLINE" "$D_S6" "$D_S6RC"; do
+  [ -d "$d" ] || { echo "ERROR: expected source dir $d not found" >&2; exit 1; }
+done
+
+build() { # dir, extra-configure-args...
+  local d="$1"; shift
+  echo "=== $d ==="
+  ( cd "$d" && ./configure --prefix="$PREFIX" --host="$HOST" \
+      --enable-static --disable-shared "$@" \
+    && make -j"$JOBS" \
+    && make install DESTDIR="$DESTDIR" )
+}
+
 # skalibs cannot autodetect these while cross-compiling; all four are mandatory.
-./skalibs-*/configure --prefix="$PREFIX" --host="$HOST" \
-  --enable-static --disable-shared \
+build "$D_SKALIBS" \
   --with-sysdep-devurandom=yes \
   --with-sysdep-posixspawnearlyreturn=no \
   --with-sysdep-procselfexe=/proc/self/exe \
   --with-sysdep-selectinfinite=yes
-make -C skalibs-* -j"$JOBS" && make -C skalibs-* install DESTDIR="$DESTDIR"
 
-./execline-*/configure --prefix="$PREFIX" --host="$HOST" \
-  --enable-static --disable-shared \
-  --with-include="$PREFIX/include" --with-lib="$PREFIX/lib"
-make -C execline-* -j"$JOBS" && make -C execline-* install DESTDIR="$DESTDIR"
+build "$D_EXECLINE" \
+  --with-include="$STAGE/include" --with-lib="$STAGE/lib"
 
-./s6-*/configure --prefix="$PREFIX" --host="$HOST" \
-  --enable-static --disable-shared \
-  --with-include="$PREFIX/include" --with-lib="$PREFIX/lib" \
-  --with-sysdeps="$PREFIX/lib/skalibs/sysdeps"
-make -C s6-*/ -j"$JOBS" && make -C s6-*/ install DESTDIR="$DESTDIR"
+build "$D_S6" \
+  --with-include="$STAGE/include" --with-lib="$STAGE/lib" \
+  --with-sysdeps="$STAGE/lib/skalibs/sysdeps"
 
-./s6-rc-*/configure --prefix="$PREFIX" --host="$HOST" \
-  --enable-static --disable-shared \
-  --with-include="$PREFIX/include" --with-lib="$PREFIX/lib" \
-  --with-sysdeps="$PREFIX/lib/skalibs/sysdeps" --with-dynlib="$PREFIX/lib"
-make -C s6-rc-*/ -j"$JOBS" && make -C s6-rc-*/ install DESTDIR="$DESTDIR"
+build "$D_S6RC" \
+  --with-include="$STAGE/include" --with-lib="$STAGE/lib" \
+  --with-sysdeps="$STAGE/lib/skalibs/sysdeps" --with-dynlib="$STAGE/lib"
 
+# ---------------------------------------------------------------- verify
 echo
-echo "=== installed ==="
-ls "$INSTALL_PREFIX/bin" | wc -l | sed 's/^/bin entries: /'
-ls "$INSTALL_PREFIX/libexec" 2>/dev/null | sed 's/^/libexec: /'
-echo "staging : $INSTALL_PREFIX"
-echo "=== sanity: prefix baked in (must point at $PREFIX) ==="
-grep -a -o "$PREFIX/libexec/[a-z0-9-]*" "$INSTALL_PREFIX/bin/s6-rc-init" | sort -u | head -3
+echo "=== installed into $STAGE ==="
+find "$STAGE/bin" -maxdepth 1 -type f | wc -l | sed 's/^/bin entries : /'
+ls "$STAGE/libexec" 2>/dev/null | sed 's/^/libexec     : /' || true
+ls "$STAGE/lib"/*.a 2>/dev/null | wc -l | sed 's/^/static libs : /'
+
+echo "=== baked prefix (must be $PREFIX) ==="
+grep -a -o "$PREFIX/libexec/[A-Za-z0-9_-]*" "$STAGE/bin/s6-rc-init" | sort -u | head -3
+echo "=== stray build dir inside binaries (must be none) ==="
+grep -a -l "$WORK" "$STAGE"/bin/* 2>/dev/null || echo "(none)"
+
 echo "=== runtime deps (expect only libc.so / libdl.so) ==="
-for b in s6-svscan s6-supervise s6-svc s6-rc s6-rc-init s6-log; do
-  printf '%-16s ' "$b"; "$TC/bin/llvm-readelf" -d "$INSTALL_PREFIX/bin/$b" 2>/dev/null \
-    | awk '/NEEDED/{printf "%s ", $NF} END{print ""}'
+for b in s6-svscan s6-supervise s6-svc s6-svstat s6-log s6-rc s6-rc-init s6-rc-compile; do
+  printf '%-16s ' "$b"
+  "$TC/bin/llvm-readelf" -d "$STAGE/bin/$b" 2>/dev/null \
+    | awk '/NEEDED/{gsub(/[][]/,"",$NF); printf "%s ", $NF} END{print ""}'
 done
 echo "DONE"
