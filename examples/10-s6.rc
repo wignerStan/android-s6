@@ -1,0 +1,25 @@
+# K70 service tree — Android init owns EXACTLY TWO entry points:
+#   k70-s6-svscan : the s6 supervisor-of-supervisors (owns the scandir)
+#   k70-s6-rc     : oneshot that brings up the compiled s6-rc database
+# Everything else (sing-box, watchdog, dropbear) is owned by s6 via s6-rc
+# dependencies:  init -> s6-svscan -> s6-supervise -> services
+#
+# Both services exec /system/bin/sh with a script, NOT a binary in /data/adb:
+# init's domain cannot execute files labelled adb_data_file, so the entry
+# point must be a system binary.
+service k70-s6-svscan /system/bin/sh /data/adb/s6/run-svscan.sh
+    class late_start
+    user root
+    group root
+    seclabel u:r:ksu:s0
+    setenv PATH /data/adb/s6/bin:/system/bin:/system/xbin:/sbin:/vendor/bin
+
+service k70-s6-rc /system/bin/sh /data/adb/s6/k70-s6-rc-init.sh
+    user root
+    group root
+    seclabel u:r:ksu:s0
+    setenv PATH /data/adb/s6/bin:/system/bin:/system/xbin:/sbin:/vendor/bin
+    oneshot
+
+on property:sys.boot_completed=1
+    start k70-s6-rc
