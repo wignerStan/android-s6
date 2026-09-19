@@ -133,6 +133,33 @@ patch_execline_glob
 build "$D_EXECLINE" \
   --with-include="$STAGE/include" --with-lib="$STAGE/lib"
 
+# s6-envuidgid iterates the group database with getgrent()/endgrent(), which
+# bionic does not provide (Android has no group database). Stub it: no
+# supplementary groups are discovered, numeric gid handling still works.
+patch_s6_envuidgid() {
+  local f="$D_S6/src/daemontools-extras/s6-envuidgid.c"
+  [ -f "$f" ] || { echo "WARN: $f not found, skipping envuidgid patch" >&2; return 0; }
+  python3 - "$f" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+i = s.find('static int prot_readgroups')
+if i != -1:
+    s = s[:i] + (
+        'static int prot_readgroups (char const *name, gid_t *tab, unsigned int max)\n'
+        '{\n'
+        '  /* Android/bionic has no group database iteration (getgrent/endgrent). */\n'
+        '  (void)name ; (void)tab ; (void)max ;\n'
+        '  return 0 ;\n'
+        '}\n'
+    ) + s[s.index('\n}\n', i) + 3:]
+    open(p, 'w').write(s)
+    print('patched (prot_readgroups stub):', p)
+PY
+}
+
+patch_s6_envuidgid
+
 build "$D_S6" \
   --with-include="$STAGE/include" --with-lib="$STAGE/lib" \
   --with-sysdeps="$STAGE/lib/skalibs/sysdeps"
