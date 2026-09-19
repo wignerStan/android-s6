@@ -39,6 +39,9 @@ init (PID 1)
 └── lib/        static archives (skalibs / execline / s6 / s6-rc)
 ```
 
+The s6-rc **service tree** used on the test device is in [`services/`](services/) —
+compile it with `s6-rc-compile` (see `services/README.md`).
+
 `lib/` holds **static** archives: the tools link `skalibs` statically and only
 need bionic's `libc.so`, which every device already has. That means no
 `LD_LIBRARY_PATH`, and it keeps working from `/data/adb` *before the user

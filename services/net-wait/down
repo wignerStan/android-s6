@@ -1,0 +1,2 @@
+#!/data/adb/s6/bin/execlineb -P
+/system/bin/true

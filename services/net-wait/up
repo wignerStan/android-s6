@@ -1,0 +1,2 @@
+#!/data/adb/s6/bin/execlineb -P
+/system/bin/sh /data/adb/s6/bin/net-wait.sh

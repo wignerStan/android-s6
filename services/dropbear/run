@@ -1,0 +1,13 @@
+#!/system/bin/sh
+exec 2>&1
+BIN=/data/data/com.termux/files/usr/bin/dropbear
+PREFIX=/data/data/com.termux/files/usr
+i=0
+while [ ! -x "$BIN" ]; do
+  sleep 10
+  i=$((i+1))
+  [ $i -gt 360 ] && exit 1
+done
+TUID=$(stat -c %u /data/data/com.termux 2>/dev/null)
+[ -z "$TUID" ] && TUID=10338
+exec /system/bin/su "$TUID" -c "export PATH=$PREFIX/bin; export LD_LIBRARY_PATH=$PREFIX/lib; export HOME=/data/data/com.termux/files/home; exec dropbear -F -p 8022"

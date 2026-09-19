@@ -39,7 +39,11 @@ jobs:
           ./build.sh
 
       - name: Package
-        run: tar -C /data/adb -czf "android-s6-aarch64-${GITHUB_REF_NAME}.tar.gz" s6
+        # --owner/--group 0 so the tree extracts as root on the device (without
+        # this the files land owned by the runner's uid, e.g. uid 1001 = radio)
+        run: |
+          tar -C /data/adb --owner=0 --group=0 --numeric-owner \
+            -czf "android-s6-aarch64-${GITHUB_REF_NAME}.tar.gz" s6
 
       - uses: actions/upload-artifact@v4
         with:
