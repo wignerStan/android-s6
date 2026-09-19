@@ -98,6 +98,38 @@ build "$D_SKALIBS" \
   --with-sysdep-procselfexe=/proc/self/exe \
   --with-sysdep-selectinfinite=yes
 
+# Android/bionic provides no glob(), so execline's elglob command cannot be
+# built. Stub it out: execlineb and every other command (which is all s6-rc
+# needs for oneshot up/down scripts) are unaffected.
+patch_execline_glob() {
+  local f="$D_EXECLINE/src/libexecline/exlsn_elglob.c"
+  [ -f "$f" ] || { echo "WARN: $f not found, skipping glob patch" >&2; return 0; }
+  python3 - "$f" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace('#include <glob.h>\n', '')
+i = s.find('static int elgloberrfunc')
+if i != -1:                      # drop the now-unused error callback
+    s = s[:i] + s[s.index('\n}\n', i) + 3:]
+i = s.find('int exlsn_elglob (')
+if i != -1:                      # stub the function itself
+    s = s[:i] + (
+        'int exlsn_elglob (int argc, char const **argv, char const *const *envp, exlsn_t *info)\n'
+        '{\n'
+        '  /* Android/bionic has no glob(); the elglob command is unavailable. */\n'
+        '  (void)argc ; (void)argv ; (void)envp ; (void)info ;\n'
+        '  errno = ENOSYS ;\n'
+        '  return -1 ;\n'
+        '}\n'
+    ) + s[s.index('\n}\n', i) + 3:]
+open(p, 'w').write(s)
+print('patched (glob stub):', p)
+PY
+}
+
+patch_execline_glob
+
 build "$D_EXECLINE" \
   --with-include="$STAGE/include" --with-lib="$STAGE/lib"
 
