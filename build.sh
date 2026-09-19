@@ -15,6 +15,11 @@
 set -euo pipefail
 
 PREFIX="${PREFIX:-/data/adb/s6}"
+# Optional staging root: files are installed into $DESTDIR$PREFIX while the
+# compiled-in prefix stays $PREFIX. Useful on hosts where /data is not writable
+# (macOS) and in CI.
+DESTDIR="${DESTDIR:-}"
+INSTALL_PREFIX="$DESTDIR$PREFIX"
 API="${API:-24}"
 ABI="${ABI:-arm64-v8a}"
 JOBS="${JOBS:-$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)}"
@@ -82,34 +87,35 @@ done
   --with-sysdep-posixspawnearlyreturn=no \
   --with-sysdep-procselfexe=/proc/self/exe \
   --with-sysdep-selectinfinite=yes
-make -C skalibs-* -j"$JOBS" && make -C skalibs-* install
+make -C skalibs-* -j"$JOBS" && make -C skalibs-* install DESTDIR="$DESTDIR"
 
 ./execline-*/configure --prefix="$PREFIX" --host="$HOST" \
   --enable-static --disable-shared \
   --with-include="$PREFIX/include" --with-lib="$PREFIX/lib"
-make -C execline-* -j"$JOBS" && make -C execline-* install
+make -C execline-* -j"$JOBS" && make -C execline-* install DESTDIR="$DESTDIR"
 
 ./s6-*/configure --prefix="$PREFIX" --host="$HOST" \
   --enable-static --disable-shared \
   --with-include="$PREFIX/include" --with-lib="$PREFIX/lib" \
   --with-sysdeps="$PREFIX/lib/skalibs/sysdeps"
-make -C s6-*/ -j"$JOBS" && make -C s6-*/ install
+make -C s6-*/ -j"$JOBS" && make -C s6-*/ install DESTDIR="$DESTDIR"
 
 ./s6-rc-*/configure --prefix="$PREFIX" --host="$HOST" \
   --enable-static --disable-shared \
   --with-include="$PREFIX/include" --with-lib="$PREFIX/lib" \
   --with-sysdeps="$PREFIX/lib/skalibs/sysdeps" --with-dynlib="$PREFIX/lib"
-make -C s6-rc-*/ -j"$JOBS" && make -C s6-rc-*/ install
+make -C s6-rc-*/ -j"$JOBS" && make -C s6-rc-*/ install DESTDIR="$DESTDIR"
 
 echo
 echo "=== installed ==="
-ls "$PREFIX/bin" | wc -l | sed 's/^/bin entries: /'
-ls "$PREFIX/libexec" 2>/dev/null | sed 's/^/libexec: /'
+ls "$INSTALL_PREFIX/bin" | wc -l | sed 's/^/bin entries: /'
+ls "$INSTALL_PREFIX/libexec" 2>/dev/null | sed 's/^/libexec: /'
+echo "staging : $INSTALL_PREFIX"
 echo "=== sanity: prefix baked in (must point at $PREFIX) ==="
-grep -a -o "$PREFIX/libexec/[a-z0-9-]*" "$PREFIX/bin/s6-rc-init" | sort -u | head -3
+grep -a -o "$PREFIX/libexec/[a-z0-9-]*" "$INSTALL_PREFIX/bin/s6-rc-init" | sort -u | head -3
 echo "=== runtime deps (expect only libc.so / libdl.so) ==="
 for b in s6-svscan s6-supervise s6-svc s6-rc s6-rc-init s6-log; do
-  printf '%-16s ' "$b"; "$TC/bin/llvm-readelf" -d "$PREFIX/bin/$b" 2>/dev/null \
+  printf '%-16s ' "$b"; "$TC/bin/llvm-readelf" -d "$INSTALL_PREFIX/bin/$b" 2>/dev/null \
     | awk '/NEEDED/{printf "%s ", $NF} END{print ""}'
 done
 echo "DONE"
