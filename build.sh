@@ -82,10 +82,13 @@ done
 build() { # dir, extra-configure-args...
   local d="$1"; shift
   echo "=== $d ==="
+  # NDK has no aarch64-linux-android-ar; skarnet's configure warns that AR/RANLIB/
+  # STRIP must be passed on the make command line (otherwise: Error 127 on
+  # libskarnet.a.xyzzy).
   ( cd "$d" && ./configure --prefix="$PREFIX" --host="$HOST" \
       --enable-static --disable-shared "$@" \
-    && make -j"$JOBS" \
-    && make install DESTDIR="$DESTDIR" )
+    && make -j"$JOBS" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" \
+    && make install DESTDIR="$DESTDIR" AR="$AR" RANLIB="$RANLIB" STRIP="$STRIP" )
 }
 
 # skalibs cannot autodetect these while cross-compiling; all four are mandatory.
