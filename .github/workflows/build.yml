@@ -1,0 +1,48 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: r27d
+      PREFIX: /data/adb/s6
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Android NDK
+        run: |
+          curl -fsSL -o ndk.zip "https://dl.google.com/android/repository/android-ndk-${NDK_VERSION}-linux.zip"
+          unzip -q ndk.zip
+          echo "NDK=$PWD/android-ndk-${NDK_VERSION}" >> "$GITHUB_ENV"
+
+      # PREFIX is baked into the binaries (s6 execs helpers from $PREFIX/libexec),
+      # so the build must install to the final on-device path.
+      - name: Prepare final prefix
+        run: |
+          sudo mkdir -p "$PREFIX"
+          sudo chown -R "$USER" /data/adb
+
+      - name: Build skalibs -> execline -> s6 -> s6-rc
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      - name: Package
+        run: tar -C /data/adb -czf "android-s6-aarch64-${GITHUB_REF_NAME}.tar.gz" s6
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-s6-aarch64
+          path: android-s6-aarch64-*.tar.gz
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: android-s6-aarch64-*.tar.gz
